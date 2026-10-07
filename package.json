@@ -1,0 +1,10 @@
+{
+  "name": "chosori-playground",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "pregenerate": "node scripts/pregenerate.mjs"
+  }
+}
