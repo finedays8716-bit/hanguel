@@ -1,4 +1,4 @@
-import { CONSONANTS, SEED, initialOf, imgKey, withRo } from './seed.js';
+import { CONSONANTS, SEED, SOUNDS, initialOf, imgKey, withRo, hasFinal, topic } from './seed.js';
 
 const $app = document.getElementById('app');
 
@@ -60,6 +60,7 @@ function tone(freqs, step = 0.13, type = 'triangle', vol = 0.18) {
   } catch { /* 소리 미지원 */ }
 }
 const ding = () => tone([784, 988, 1319]); // 딩-동-댕
+const pop = () => tone([880, 1175], 0.1); // 자음이 나올 때 짧은 소리
 const softNo = () => tone([330, 262], 0.16, 'sine', 0.12); // 부드러운 아쉬움
 
 const PRAISE = ['딩동댕! 맞았어요 🎉', '우와, 대단해요! 👏', '정답이에요! 최고예요 ⭐', '잘했어요! 짝짝짝 👏', '척척박사네요! 🌟'];
@@ -177,16 +178,20 @@ const wordsOf = (s) => (!s ? [] : s.type === 'l3' ? s.opts.map((o) => o.word) : 
 
 function picHTML(word, emoji, extra = '') {
   const u = memImg.get(word);
-  return `<div class="pic ${extra}" data-word="${esc(word)}">${u ? `<img alt="${esc(word)}" src="${u}">` : `<span class="emoji loading">${esc(emoji)}</span>`}</div>`;
+  const failed = Date.now() - (failedAt.get(word) || 0) < 60000;
+  const inner = u ? `<img alt="${esc(word)}" src="${u}">`
+    : failed ? `<span class="emoji">${esc(emoji)}</span>` // 그림을 못 만들었을 때만 이모지로 대신
+    : `<span class="drawing">그림 그리는 중…</span>`;
+  return `<div class="pic ${extra}" data-word="${esc(word)}" data-emoji="${esc(emoji)}">${inner}</div>`;
 }
 function hydrate() {
   document.querySelectorAll('.pic[data-word]').forEach((el) => {
-    if (el.querySelector('img')) return;
+    if (el.querySelector('img') || el.querySelector('.emoji')) return;
     const w = el.dataset.word;
     getImage(w).then((u) => {
       if (!el.isConnected) return;
       if (u) el.innerHTML = `<img alt="${esc(w)}" src="${u}">`;
-      else { const e = el.querySelector('.emoji'); if (e) e.classList.remove('loading'); }
+      else el.innerHTML = `<span class="emoji">${esc(el.dataset.emoji || '')}</span>`;
     });
   });
 }
@@ -198,7 +203,7 @@ const isHangul = (s) => typeof s === 'string' && /^[가-힣]{1,8}$/.test(s);
 const good = (c, w) => isHangul(w) && initialOf(w) === c;
 const uniq = (arr) => { const s = new Set(); return arr.filter((x) => (s.has(x.word) ? false : s.add(x.word))); };
 
-function clean(level, c, items) {
+function cleanRaw(level, c, items) {
   const src = Array.isArray(items) ? items : [];
   if (level === 1) return uniq(src.filter((x) => good(c, x.word)).map((x) => ({ word: x.word, emoji: emojiOf(x.word, x.emoji) })));
   if (level === 2) {
@@ -208,6 +213,8 @@ function clean(level, c, items) {
   return uniq(src.filter((x) => good(c, x.word) && isHangul(x.distractor) && initialOf(x.distractor) !== c)
     .map((x) => ({ word: x.word, emoji: emojiOf(x.word, x.emoji), distractor: x.distractor, distractorEmoji: emojiOf(x.distractor, x.distractorEmoji) })));
 }
+
+const clean = (level, c, items) => [...cleanRaw(level, c, items)].sort((a, b) => hasFinal(a.word) - hasFinal(b.word));
 
 function fillLevel(level, c, count, list) {
   const out = [...list];
@@ -231,9 +238,8 @@ function makeSlides(level, list) {
       opts: shuffle([{ word: d.word, emoji: d.emoji, correct: true }, { word: d.distractor, emoji: d.distractorEmoji, correct: false }]),
     }));
   }
-  return list.map((d) => ({ type: `l${level}`, d, revealed: false }));
+  return list.map((d) => ({ type: `l${level}`, d, revealed: false, initShown: false, step: 0 }));
 }
-const finale = () => [0, 1, 2, 3].map((step) => ({ type: 'fin', step }));
 
 async function fetchLevel(c, count, level) {
   try {
@@ -276,7 +282,7 @@ async function build(fresh = false) {
   const failed = entry.results.some((r) => r?.err);
   lists.flat().forEach((x) => { used.add(x.word); if (x.distractor) used.add(x.distractor); });
 
-  state.slides = [...makeSlides(1, lists[0]), ...makeSlides(2, lists[1]), ...makeSlides(3, lists[2]), ...finale()];
+  state.slides = [...makeSlides(1, lists[0]), ...makeSlides(2, lists[1]), ...makeSlides(3, lists[2])];
   state.idx = 0; state.screen = 'play';
   render();
   enqueue(state.slides.flatMap(wordsOf));
@@ -307,9 +313,14 @@ const PHASES = [
   { id: 'l1', label: '① 그림 보고 첫소리' },
   { id: 'l2', label: '② 수수께끼' },
   { id: 'l3', label: '③ 둘 중 고르기' },
-  { id: 'fin', label: '🍫 초코 마무리' },
 ];
 const cur = () => state.slides[state.idx];
+const NAME = Object.fromEntries(CONSONANTS.map((x) => [x.c, x.name]));
+const roName = (c) => (NAME[c] === '리을' ? '로' : '으로');
+const startSentence = (s, c) => `${s.d.word}${topic(s.d.word)} ${NAME[c]}${roName(c)} 시작해요`;
+const soundSentence = (c) => (SOUNDS[c] ? `${NAME[c]}은 ${SOUNDS[c]} 소리가 나요` : `${NAME[c]}은 소리가 없는 친구예요. 바로 모음 소리가 나요`);
+const soundEcho = (s, c) => (SOUNDS[c] ? `${SOUNDS[c]}, ${SOUNDS[c]}, ${s.d.word}` : soundSentence(c));
+const soundLabel = (c) => (SOUNDS[c] ? `‘${SOUNDS[c]}’ 소리 듣기` : '소리 안내 듣기');
 
 function renderSetup() {
   return `
@@ -339,30 +350,41 @@ function renderSlide(s) {
   const c = state.consonant;
   if (s.type === 'l1') {
     const d = s.d;
-    return `<div class="stage">
-      <div class="q-chip">그림을 보고 첫소리를 말해 볼까요?</div>
-      <div class="row">${picHTML(d.word, d.emoji)}</div>
-      ${s.revealed
+    const sound = SOUNDS[c];
+    const chip = s.step === 0 ? '그림을 보고 이름을 말해 볼까요?'
+      : s.step === 1 ? `‘${d.word}’${topic(d.word)} ‘${c}’${withRo(c).slice(1)} 시작해요!`
+      : sound ? `‘${c}’은 ‘${sound}’ 소리가 나요` : `‘${c}’은 소리가 없는 친구예요`;
+    const answer = s.step === 0
+      ? `<div class="answer"><div class="word" aria-hidden="true">？</div></div>`
+      : s.step === 1
         ? `<div class="answer"><div class="init">${esc(c)}</div><div class="word">${wordWithHL(d.word)}</div></div>`
-        : `<div class="answer"><div class="word" aria-hidden="true">？</div></div>`}
+        : `<div class="answer"><div class="init">${esc(c)}</div><div class="arrow">→</div>${sound ? `<div class="snd">${esc(sound)}</div>` : `<div class="snd mute">소리 없음</div>`}<div class="word">${wordWithHL(d.word)}</div></div>`;
+    return `<div class="stage">
+      <div class="q-chip">${esc(chip)}</div>
+      <div class="row">${picHTML(d.word, d.emoji)}${answer}</div>
       <div class="tools">
-        <button class="btn small" data-act="say-first">🔊 첫소리 듣기</button>
-        ${s.revealed ? `<button class="btn small" data-act="say-word">🔊 이름 듣기</button>` : ''}
+        <button class="btn small" data-act="say-word">🔊 소리 듣기</button>
+        ${s.step === 1 ? `<button class="btn small" data-act="say-start">🔊 ${esc(c)}${roName(c) === '로' ? '로' : '으로'} 시작해요</button>` : ''}
+        ${s.step === 2 ? `<button class="btn small" data-act="say-sound">🔊 ${esc(soundLabel(c))}</button>` : ''}
       </div>
     </div>`;
   }
   if (s.type === 'l2') {
     const d = s.d;
+    const chip = !s.revealed ? '수수께끼' : s.initShown ? `‘${c}’${withRo(c).slice(1)} 시작해요!` : '어떤 자음으로 시작할까요?';
     return `<div class="stage">
-      <div class="q-chip">수수께끼</div>
+      <div class="q-chip">${esc(chip)}</div>
       <div class="riddle">${esc(d.riddle)}</div>
       <div class="row">
         ${s.revealed ? picHTML(d.word, d.emoji) : `<div class="pic mystery"><span>?</span></div>`}
+        ${s.revealed ? `<div class="answer">
+          ${s.initShown ? `<div class="init">${esc(c)}</div>` : `<button class="init ask" data-act="show-init" aria-label="자음 보기">?</button>`}
+          <div class="word">${s.initShown ? wordWithHL(d.word) : esc(d.word)}</div></div>` : ''}
       </div>
-      ${s.revealed ? `<div class="answer"><div class="init">${esc(c)}</div><div class="word">${wordWithHL(d.word)}</div></div>` : ''}
       <div class="tools">
         <button class="btn small" data-act="say-riddle">🔊 문제 읽어 주기</button>
         ${s.revealed ? `<button class="btn small" data-act="say-word">🔊 정답 듣기</button>` : ''}
+        ${s.initShown ? `<button class="btn small" data-act="say-sound">🔊 ${esc(soundLabel(c))}</button>` : ''}
       </div>
     </div>`;
   }
@@ -370,7 +392,7 @@ function renderSlide(s) {
     const wrong = s.picked !== null && !s.opts[s.picked].correct;
     const msg = wrong ? '앗, 다시 한번 생각해 볼까요?' : s.revealed ? (s.praise || PRAISE[0]) : '';
     return `<div class="stage">
-      <div class="q-chip">‘${esc(withRo(c))}’ 시작하는 것은 어느 쪽일까요?</div>
+      <div class="q-chip">‘${esc(c)}’${withRo(c).slice(1)} 시작하는 것은 어느 쪽일까요?</div>
       <div class="cards">
         ${s.opts.map((o, i) => {
           const showLabel = s.revealed || s.picked === i;
@@ -381,17 +403,14 @@ function renderSlide(s) {
       <div class="msg ${wrong ? '' : 'good'}">${msg}</div>
     </div>`;
   }
-  const steps = [
-    `<div class="finale"><div class="q-chip">마무리 활동</div><div class="emoji-xl">🍫</div><div class="big">오늘은 ‘초코’와 함께 마무리해요!<br>초코를 열기 전에, 겉모습을 살펴볼까요?</div></div>`,
-    `<div class="finale"><div class="q-chip">초코의 첫소리</div><div class="syl"><span>초</span><span>코</span></div><div class="answer"><div class="init">ㅊ</div></div><div class="big">“초코는 ㅊ으로 시작해!”<br>다 같이 따라 말해 봐요</div><div class="tools"><button class="btn small" data-act="say-choco">🔊 초코</button></div></div>`,
-    `<div class="finale"><div class="q-chip">자음 찾기</div><div class="syl"><span>${esc(c)}</span></div><div class="big">오늘 배운 자음 ‘${esc(c)}’이<br>초코 포장 어디에 숨어 있을까요?</div><div class="tip">포장에 없으면 “어? 이 글자는 없네. 다른 글자를 찾아보자!” 하고 다른 자음을 찾아봐요.</div></div>`,
-    `<div class="finale"><div class="q-chip">이야기 나누기</div><div class="emoji-xl">📜</div><div class="big">한글날 이야기를 나눈 뒤<br>초코를 맛있게 먹어요! 😋</div></div>`,
-  ];
-  return `<div class="stage">${steps[s.step]}</div>`;
+  return '';
 }
 
 function primaryLabel(s) {
-  if (['l1', 'l2', 'l3'].includes(s.type) && !s.revealed) return '정답 보기';
+  if (s.type === 'l1' && s.step === 0) return '첫소리 보기';
+  if (s.type === 'l1' && s.step === 1) return '소리 알아보기';
+  if (s.type === 'l2' && s.revealed && !s.initShown) return '자음 보기';
+  if (['l2', 'l3'].includes(s.type) && !s.revealed) return '정답 보기';
   return state.idx === state.slides.length - 1 ? '처음으로' : '다음 ▶';
 }
 
@@ -427,7 +446,14 @@ function render() {
 /* ------------------------------------------------------------------ */
 function next() {
   const s = cur();
-  if (['l1', 'l2', 'l3'].includes(s.type) && !s.revealed) {
+  const c = state.consonant;
+  if (s.type === 'l1' && s.step < 2) {
+    s.step++; s.revealed = true;
+    if (s.step === 1) { celebrate(false); speak(startSentence(s, c)); } else { pop(); speak(soundSentence(c)); }
+    return render();
+  }
+  if (s.type === 'l2' && s.revealed && !s.initShown) { s.initShown = true; pop(); return render(); }
+  if (['l2', 'l3'].includes(s.type) && !s.revealed) {
     s.revealed = true;
     if (s.type === 'l3') s.praise = PRAISE[Math.floor(Math.random() * PRAISE.length)];
     celebrate(false);
@@ -454,10 +480,11 @@ $app.addEventListener('click', (e) => {
     case 'next': next(); break;
     case 'prev': prev(); break;
     case 'jump': { const i = state.slides.findIndex((x) => x.type === el.dataset.p); if (i >= 0) { state.idx = i; render(); } break; }
-    case 'say-first': speak([...s.d.word][0]); break;
+    case 'show-init': if (s.type === 'l2' && s.revealed && !s.initShown) { s.initShown = true; pop(); render(); } break;
+    case 'say-start': speak(startSentence(s, state.consonant)); break;
+    case 'say-sound': speak(soundEcho(s, state.consonant)); break;
     case 'say-word': speak(s.d.word); break;
     case 'say-riddle': speak(s.d.riddle); break;
-    case 'say-choco': speak('초코'); break;
     case 'pick-card': {
       if (s.revealed) break;
       const i = Number(el.dataset.i);
