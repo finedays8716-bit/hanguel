@@ -1,3 +1,4 @@
+import { startGame } from './game.js';
 import { CONSONANTS, SEED, SOUNDS, initialOf, imgKey, withRo, hasFinal, topic } from './seed.js';
 
 const $app = document.getElementById('app');
@@ -6,6 +7,7 @@ const state = {
   screen: 'setup', // setup | loading | play
   consonant: null,
   count: 3,
+  speed: 'normal',
   slides: [],
   idx: 0,
   toast: '',
@@ -333,7 +335,13 @@ function renderSetup() {
     <div class="opt-row">단계별 문제 수
       ${[3, 4, 5].map((n) => `<button class="pill ${state.count === n ? 'on' : ''}" data-act="count" data-n="${n}">${n}개</button>`).join('')}
     </div>
-    <button class="btn primary go" data-act="start" ${state.consonant ? '' : 'disabled'}>놀이 시작</button>
+    <div class="go-row">
+      <button class="btn primary go" data-act="start" ${state.consonant ? '' : 'disabled'}>놀이 시작</button>
+      <button class="btn leaf go" data-act="game" ${state.consonant ? '' : 'disabled'}>🐊 악어 게임</button>
+    </div>
+    <div class="opt-row small">악어 게임 속도
+      ${[['slow', '느림'], ['normal', '보통'], ['fast', '빠름']].map(([v, t]) => `<button class="pill ${state.speed === v ? 'on' : ''}" data-act="speed" data-v="${v}">${t}</button>`).join('')}
+    </div>
   </main>`;
 }
 
@@ -434,6 +442,7 @@ function renderPlay() {
 }
 
 function render() {
+  if (state.screen === 'game') return; // 악어 게임은 자기 화면을 직접 그립니다
   $app.innerHTML =
     (state.screen === 'setup' ? renderSetup() : state.screen === 'loading' ? renderLoading() : renderPlay()) +
     (state.toast ? `<div class="toast" role="status">${esc(state.toast)}</div>` : '');
@@ -465,6 +474,19 @@ function next() {
 }
 const prev = () => { if (state.idx > 0) { state.idx--; render(); } };
 
+let stopGame = null;
+function playGame() {
+  const c = state.consonant;
+  if (!c) return;
+  state.screen = 'game';
+  stopGame = startGame($app, {
+    consonant: c,
+    speed: state.speed,
+    api: { speak, tone, celebrate, getSound: () => state.sound, toggleSound: () => (state.sound = !state.sound) },
+    onExit: () => { stopGame = null; state.screen = 'setup'; render(); },
+  });
+}
+
 $app.addEventListener('click', (e) => {
   const el = e.target.closest('[data-act]');
   if (!el) return;
@@ -474,6 +496,8 @@ $app.addEventListener('click', (e) => {
     case 'pick-c': state.consonant = el.dataset.c; warm(state.consonant, state.count); warmImages(state.consonant); render(); break;
     case 'count': state.count = Number(el.dataset.n); if (state.consonant) warm(state.consonant, state.count); render(); break;
     case 'start': if (state.consonant) build(false); break;
+    case 'game': playGame(); break;
+    case 'speed': state.speed = el.dataset.v; render(); break;
     case 'regen': if (state.consonant) build(true); break;
     case 'home': state.screen = 'setup'; render(); break;
     case 'sound': state.sound = !state.sound; render(); break;
